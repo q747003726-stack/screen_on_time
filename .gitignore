@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Downloaded build toolchain (JDK, build-tools, platform-tools, android.jar).
+# Recreated by: python tools/setup_toolchain.py
+# ---------------------------------------------------------------------------
+tools/toolchain/
+tools/**/toolchain/
+
+# ---------------------------------------------------------------------------
+# Local signing material. The build generates this on first run.
+# Never commit a keystore: it is the identity of the published APK.
+# ---------------------------------------------------------------------------
+tools/signing.keystore
+*.keystore
+*.jks
+*.p12
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+app/build/
+*.idsig
+*.apk.idsig
+tools/**/versioncode.txt
+
+# ---------------------------------------------------------------------------
+# Working files from reverse-engineering / experiments on other apps.
+# Not part of the project; kept out of the repository on purpose.
+# ---------------------------------------------------------------------------
+work/
+
+# The original third-party APK that motivated this project, plus its extracted
+# files. Not ours to redistribute.
+/应用时间限额.apk
+/app/build/
+
+# Loose copies of built APKs at the top level; the canonical one lives in
+# assets/ and app/build/.
+/*.apk
+
+# Loose copies of the icon art and preview at the top level. The canonical
+# copies live under assets/icon/.
+/IMG_SEGMENT_*.png
+
+# Older Chinese-named preview copy; superseded by assets/icon/preview.png.
+/*预览.png
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# Scratch
+# ---------------------------------------------------------------------------
+*.log
+*.tmp
+*.part
+tmp/
+scratch/
