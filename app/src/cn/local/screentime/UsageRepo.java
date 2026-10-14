@@ -378,9 +378,72 @@ public class UsageRepo {
     public List<AppUse> liveApps(String day) {
         long from = midnight(day);
         long to = Math.min(nextMidnight(day), now());
-        DayScan sc = scanDay(from, to);
+        return appsInRange(from, to);
+    }
+
+    /**
+     * Per-app foreground time over an arbitrary window.
+     *
+     * Derived from events rather than the daily buckets, because a charge cycle
+     * starts at an arbitrary time of day and would not line up with a bucket.
+     * Reference counting handles packages whose activities resume/pause in an
+     * interleaved order.
+     */
+    public List<AppUse> appsInRange(long from, long to) {
         List<AppUse> out = new ArrayList<>();
-        for (Map.Entry<String, long[]> en : sc.apps.entrySet()) {
+        UsageStatsManager m = usm();
+        if (m == null || to <= from) return out;
+        UsageEvents ev = m.queryEvents(from, to);
+        if (ev == null) return out;
+
+        UsageEvents.Event e = new UsageEvents.Event();
+        Map<String, Integer> refs = new HashMap<>();
+        Map<String, Long> openAt = new HashMap<>();
+        Map<String, long[]> acc = new LinkedHashMap<>();     // pkg -> {ms, first, last}
+        long end = Math.min(to, now());
+
+        while (ev.hasNextEvent()) {
+            ev.getNextEvent(e);
+            int type = e.getEventType();
+            long ts = e.getTimeStamp();
+            String pkg = e.getPackageName();
+            if (pkg == null) continue;
+            if (type == resumeType()) {
+                Integer r = refs.get(pkg);
+                int n = (r == null ? 0 : r) + 1;
+                refs.put(pkg, n);
+                if (n == 1) openAt.put(pkg, ts);
+                long[] cur = acc.get(pkg);
+                if (cur == null) acc.put(pkg, new long[]{0, ts, ts});
+                else {
+                    if (cur[1] == 0 || ts < cur[1]) cur[1] = ts;
+                    if (ts > cur[2]) cur[2] = ts;
+                }
+            } else if (type == pauseType()) {
+                Integer r = refs.get(pkg);
+                if (r == null || r <= 0) continue;
+                int n = r - 1;
+                if (n == 0) {
+                    refs.remove(pkg);
+                    Long st = openAt.remove(pkg);
+                    long[] cur = acc.get(pkg);
+                    if (cur == null) cur = new long[]{0, st == null ? ts : st, ts};
+                    if (st != null) cur[0] += Math.max(0, ts - st);
+                    if (cur[2] < ts) cur[2] = ts;
+                    acc.put(pkg, cur);
+                } else {
+                    refs.put(pkg, n);
+                }
+            }
+        }
+        for (Map.Entry<String, Long> en : openAt.entrySet()) {
+            long[] cur = acc.get(en.getKey());
+            if (cur == null) cur = new long[]{0, en.getValue(), end};
+            cur[0] += Math.max(0, end - en.getValue());
+            if (cur[2] < end) cur[2] = end;
+            acc.put(en.getKey(), cur);
+        }
+        for (Map.Entry<String, long[]> en : acc.entrySet()) {
             long[] v = en.getValue();
             if (v[0] <= 0) continue;
             out.add(new AppUse(en.getKey(), v[0], v[1], v[2]));
@@ -389,6 +452,44 @@ public class UsageRepo {
             @Override public int compare(AppUse a, AppUse b) { return Long.compare(b.ms, a.ms); }
         });
         return out;
+    }
+
+    /**
+     * Screen-on total and unlock count over an arbitrary window.
+     * Returns {screenOnMs, unlockCount}.
+     */
+    public long[] screenOnInRange(long from, long to) {
+        long screen = 0, unlocks = 0;
+        UsageStatsManager m = usm();
+        if (m == null || to <= from) return new long[]{0, 0};
+        UsageEvents ev = m.queryEvents(from, to);
+        if (ev == null) return new long[]{0, 0};
+        UsageEvents.Event e = new UsageEvents.Event();
+        long onAt = -1;
+        boolean sawOn = false;
+        boolean sawOff = false;
+        long firstOff = 0;
+        while (ev.hasNextEvent()) {
+            ev.getNextEvent(e);
+            int type = e.getEventType();
+            long ts = e.getTimeStamp();
+            if (type == UsageEvents.Event.SCREEN_INTERACTIVE) {
+                if (onAt < 0) onAt = ts;
+                sawOn = true;
+            } else if (type == UsageEvents.Event.SCREEN_NON_INTERACTIVE) {
+                if (!sawOff) { sawOff = true; firstOff = ts; }
+                if (onAt >= 0) { screen += Math.max(0, ts - onAt); onAt = -1; }
+            } else if (type == UsageEvents.Event.KEYGUARD_HIDDEN) {
+                unlocks++;
+            }
+        }
+        if (onAt >= 0) screen += Math.max(0, to - onAt);
+        // Window opened with the screen already lit: no INTERACTIVE event inside
+        // it, so count from the window start up to the first screen-off.
+        if (!sawOn && sawOff && firstOff > from) {
+            screen += Math.max(0, firstOff - from);
+        }
+        return new long[]{screen, unlocks};
     }
 
     public static class AppUse {

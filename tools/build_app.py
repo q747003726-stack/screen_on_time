@@ -73,6 +73,11 @@ APKSIGNER = P['APKSIGNER']
 KS = os.path.join(TOOLS, 'signing.keystore')
 VER_FILE = os.path.join(TOOLS, 'versioncode.txt')
 
+# Fingerprint of the key the installed app was signed with. Every build is
+# checked against it, because a changed signer makes updates impossible to
+# install (Android refuses a package whose signer differs).
+EXPECTED_CERT_SHA256 = '9E:02:77:0A:E0:8D:F6:C9:A5:8A:50:AB:E7:09:03:AB:3B:0C:1C:14:11:AB:D1:6D:B4:9B:BD:3B:04:B2:14:8C'
+
 # ASCII-only scratch area, because aapt2 cannot read a resource directory whose
 # path contains non-ASCII characters.
 STAGE_ROOT = os.path.join(os.environ.get('TEMP', r'C:\Windows\Temp'), 'st_build')
@@ -242,7 +247,32 @@ def main():
     if r.returncode != 0:
         sys.exit('apksigner failed')
 
-    run([APKSIGNER, 'verify', '--print-certs', signed_stage])
+    r = run([APKSIGNER, 'verify', '--print-certs', signed_stage])
+
+    # Guard against the signing key silently changing. Android refuses to install
+    # an update whose signer differs, so a lost or regenerated keystore turns into
+    # a confusing "signature problem" on the phone. Fail loudly here instead.
+    expected = EXPECTED_CERT_SHA256.replace(':', '').lower()
+    if expected:
+        got = None
+        try:
+            out = (r.stdout or b'').decode('utf-8', 'replace')
+            for line in out.splitlines():
+                if 'SHA-256 digest' in line:
+                    got = line.split('digest:')[-1].strip().replace(':', '').lower()
+                    break
+        except Exception:
+            pass
+        if got and got != expected:
+            print()
+            print('!! SIGNING KEY MISMATCH', flush=True)
+            print('   expected: %s' % expected, flush=True)
+            print('   got     : %s' % got, flush=True)
+            print('   The APK will NOT install as an update. Restore the original', flush=True)
+            print('   keystore to %s' % KS, flush=True)
+            sys.exit('refusing to publish an APK signed with the wrong key')
+        if got:
+            print('   signer verified: %s' % got, flush=True)
 
     # ---------- 7. copy the finished APK back into the workspace ----------
     os.makedirs(OUT, exist_ok=True)

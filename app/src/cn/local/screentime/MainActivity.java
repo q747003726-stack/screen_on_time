@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -33,6 +34,7 @@ public class MainActivity extends Activity {
 
     private UsageRepo repo;
     private Labels labels;
+    private ChargeRepo charge;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private TextView tvDateLabel;
@@ -43,6 +45,10 @@ public class MainActivity extends Activity {
     private BarChartView chart;
     private LinearLayout appList;
     private LinearLayout permBox;
+    private LinearLayout chargeCard;
+    private TextView tvChargeBig;
+    private TextView tvChargeSub;
+    private TextView tvChargeState;
 
     private String month;      // yyyy-MM currently shown
     private String selected;   // yyyy-MM-dd
@@ -52,11 +58,16 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         repo = new UsageRepo(this);
         labels = new Labels(this);
+        charge = new ChargeRepo(this);
 
         Calendar c = Calendar.getInstance();
         month = String.format(Locale.US, "%04d-%02d",
                 c.get(Calendar.YEAR), c.get(Calendar.MONTH) + 1);
         selected = UsageRepo.today();
+
+        // Reconcile the charger state once per launch: a broadcast may have been
+        // missed while the app was force-stopped.
+        try { charge.syncWithSticky(); } catch (Throwable t) { t.printStackTrace(); }
 
         setContentView(buildUi());
         applyInsetsToContent();
@@ -164,6 +175,61 @@ public class MainActivity extends Activity {
         tvSub.setPadding(0, 0, 0, dp(12));
         root.addView(tvSub);
 
+        // ---- charge-since card, directly under the day summary ----
+        chargeCard = new LinearLayout(this);
+        chargeCard.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable cbg = new GradientDrawable();
+        cbg.setColor(Color.WHITE);
+        cbg.setCornerRadius(dp(12));
+        chargeCard.setBackground(cbg);
+        chargeCard.setPadding(dp(14), dp(11), dp(14), dp(11));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.bottomMargin = dp(10);
+        chargeCard.setLayoutParams(clp);
+
+        LinearLayout crow = new LinearLayout(this);
+        crow.setOrientation(LinearLayout.HORIZONTAL);
+        crow.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout ccol = new LinearLayout(this);
+        ccol.setOrientation(LinearLayout.VERTICAL);
+
+        tvChargeState = new TextView(this);
+        tvChargeState.setTextSize(12);
+        tvChargeState.setTextColor(Color.parseColor("#5F6368"));
+        ccol.addView(tvChargeState);
+
+        tvChargeBig = new TextView(this);
+        tvChargeBig.setTextSize(26);
+        tvChargeBig.setTextColor(Color.parseColor("#202124"));
+        ccol.addView(tvChargeBig);
+
+        tvChargeSub = new TextView(this);
+        tvChargeSub.setTextSize(11);
+        tvChargeSub.setTextColor(Color.parseColor("#8A8A8A"));
+        ccol.addView(tvChargeSub);
+
+        crow.addView(ccol, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView arrow = new TextView(this);
+        arrow.setText("充电记录 ›");
+        arrow.setTextSize(12);
+        arrow.setTextColor(Color.parseColor("#1A73E8"));
+        crow.addView(arrow);
+
+        chargeCard.addView(crow);
+        chargeCard.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                // Level 2 of the drill-down: the list of every recorded cycle.
+                // A single cycle's per-app breakdown is one level deeper, reached
+                // by tapping a row on that list.
+                startActivity(new Intent(MainActivity.this, ChargeHistoryActivity.class));
+            }
+        });
+        root.addView(chargeCard);
+
         // month navigation
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
@@ -231,7 +297,36 @@ public class MainActivity extends Activity {
         appList.setOrientation(LinearLayout.VERTICAL);
         root.addView(appList);
 
+        // Build stamp. Three APK copies exist around this project, so show the
+        // version on screen to make "did I install the new one?" answerable at a
+        // glance instead of by guessing.
+        TextView ver = new TextView(this);
+        ver.setText("版本 " + versionName() + "（versionCode " + versionCode() + "）");
+        ver.setTextSize(11);
+        ver.setTextColor(Color.parseColor("#B0B0B0"));
+        ver.setGravity(Gravity.CENTER_HORIZONTAL);
+        ver.setPadding(0, dp(18), 0, dp(8));
+        root.addView(ver);
+
         return sc;
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private int versionCode() {
+        try {
+            android.content.pm.PackageInfo pi =
+                    getPackageManager().getPackageInfo(getPackageName(), 0);
+            return (int) pi.getLongVersionCode();
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     /** Move the selected day forward/backward and keep every view in sync. */
@@ -283,6 +378,7 @@ public class MainActivity extends Activity {
                         renderCalendar();
                         renderChart();
                         renderApps(selected);
+                        renderCharge();
                     }
                 });
             }
@@ -324,6 +420,65 @@ public class MainActivity extends Activity {
             cmp = day;
         }
         tvSub.setText("解锁后 " + Fmt.dur(unlocked) + " · 解锁 " + unlocks + " 次 · " + cmp);
+    }
+
+    /** Charge card: screen time across the current discharge cycle. */
+    private void renderCharge() {
+        boolean charging = charge.isChargingNow();
+        long unplug = charge.lastUnplug();
+        List<ChargeRepo.Cycle> cycles = charge.cycles();
+
+        // Diagnostic: exactly what the card is deciding from.
+        {
+            StringBuilder dbg = new StringBuilder();
+            dbg.append("charging=").append(charging)
+               .append(" lastUnplug=").append(unplug)
+               .append(" cycles=").append(cycles.size());
+            for (ChargeRepo.Cycle c : cycles) {
+                dbg.append(" | start=").append(c.startTs)
+                   .append(" end=").append(c.endTs)
+                   .append(" on=").append(c.screenOnMs / 1000).append("s")
+                   .append(" ongoing=").append(c.ongoing)
+                   .append(" est=").append(c.estimated)
+                   .append(" calTs=").append(c.screenOnCalibratedTs);
+            }
+            android.util.Log.i("ScreenTime", "charge card: " + dbg);
+        }
+
+        ChargeRepo.Cycle cur = null;
+        for (ChargeRepo.Cycle c : cycles) {
+            if (c.ongoing) { cur = c; break; }
+        }
+
+        if (charging) {
+            tvChargeState.setText("充电中");
+            tvChargeBig.setText("--");
+            tvChargeSub.setText("拔掉充电线后开始统计本次亮屏时长");
+            return;
+        }
+        if (cur == null) {
+            // discharging but no unplug has ever been recorded
+            tvChargeState.setText("本次充电后（起点未知）");
+            tvChargeBig.setText("--");
+            tvChargeSub.setText("尚未记录到拔线时刻，下次拔线后即可统计");
+            return;
+        }
+
+        tvChargeState.setText(cur.estimated
+                ? "本次充电后（估算起点）"
+                : "本次充电后");
+        tvChargeBig.setText(Fmt.dur(cur.screenOnMs));
+        StringBuilder sb = new StringBuilder();
+        sb.append("自 ").append(Fmt.hhmm(cur.startTs)).append(" 起");
+        if (cur.unlockCount > 0) sb.append(" · 解锁 ").append(cur.unlockCount).append(" 次");
+        if (cycles.size() > 1) sb.append(" · 历史 ").append(cycles.size()).append(" 次");
+        if (cur.screenOnCalibratedTs == 0 && !cur.estimated) {
+            sb.append(" · 系统事件仅保留约 2 天，可能偏小");
+        }
+        if (cur.screenOnMs == 0) {
+            sb.append(" · 重新插拔一次充电器可重新开始计时");
+        }
+        tvChargeSub.setText(sb.toString());
     }
 
     private void renderCalendar() {

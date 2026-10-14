@@ -40,7 +40,7 @@
         android:allowBackup="true"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
+        <!-- Main screen. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -50,23 +50,50 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Internal diagnostics probe. Not exported to the launcher, but
-             reachable over adb for verification. -->
+        <!-- Internal diagnostics probe: adb-reachable, off the launcher by default. -->
         <activity
             android:name=".DiagActivity"
             android:exported="true"
             android:label="亮屏时间·诊断"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
-
+        <!-- Read-only battery probe: which battery data an unrooted app can reach. -->
+        <activity
+            android:name=".BatteryProbeActivity"
+            android:exported="true"
+            android:label="亮屏时间·电池探针"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
+        <!-- Charge-counter calibration: measures resolution and drain rate so we can
+                     judge whether unplug time can be back-estimated. -->
+        <activity
+            android:name=".BatteryCalibActivity"
+            android:exported="true"
+            android:label="亮屏时间·电池校准"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
+        <!-- Per-app detail for one day. -->
         <activity
             android:name=".DayDetailActivity"
             android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
+        <!-- One row per discharge cycle: screen time between unplug and the next plug. -->
+        <activity
+            android:name=".ChargeHistoryActivity"
+            android:exported="true"
+            android:label="充电记录"
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />
 
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Charger plug/unplug recorder. A statically registered receiver means
+             the system starts this process only when a transition happens: no
+             service, no notification, no alarm, nothing resident in between. -->
+        <receiver android:name=".PowerReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
             </intent-filter>
         </receiver>
 
